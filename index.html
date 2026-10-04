@@ -49,7 +49,11 @@ body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:16
 .resume{background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .resume p{margin:0;min-width:0;flex:1 1 220px}
 .resume .btns{display:flex;gap:8px;flex-wrap:wrap}
-.btn.danger{background:var(--bad);color:var(--surface)}
+.btn.next{width:100%;padding:16px;font-size:1.1rem}
+/* quit sits well below the card, styled as a quiet link, so it can't be hit by mistake */
+.quitRow{display:flex;justify-content:center;margin-top:56px}
+.quit{background:none;border:0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;font-size:.9rem;padding:10px 16px;border-radius:999px}
+.quit.armed{background:var(--bad);color:var(--surface);text-decoration:none;font-weight:700}
 .wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:20px 48px;display:flex;flex-direction:column;gap:20px}
 h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;line-height:1.15}
 button{font:inherit;color:inherit;cursor:pointer}
@@ -268,11 +272,9 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
       </div>
       <div class="opts" id="opts"></div>
       <div class="reveal" id="reveal" hidden></div>
-      <div class="actions" style="justify-content:space-between">
-        <button class="btn sec" id="quitBtn">Ukončit test</button>
-        <button class="btn" id="nextBtn" hidden>Další →</button>
-      </div>
+      <button class="btn next" id="nextBtn" hidden>Další →</button>
     </section>
+    <div class="quitRow"><button class="quit" id="quitBtn">Ukončit test</button></div>
   </main>
 
   <!-- RESULTS -->
@@ -542,9 +544,9 @@ document.addEventListener("keydown",e=>{
 });
 // Two-step quit so a stray tap next to "Další" can't end the test.
 let quitArmed=null;
-function disarmQuit(){clearTimeout(quitArmed);quitArmed=null;const b=$("quitBtn");b.textContent="Ukončit test";b.classList.remove("danger");b.classList.add("sec")}
+function disarmQuit(){clearTimeout(quitArmed);quitArmed=null;const b=$("quitBtn");b.textContent="Ukončit test";b.classList.remove("armed")}
 $("quitBtn").onclick=()=>{
-  if(!quitArmed){const b=$("quitBtn");b.textContent="Opravdu ukončit?";b.classList.remove("sec");b.classList.add("danger");quitArmed=setTimeout(disarmQuit,3000);return}
+  if(!quitArmed){const b=$("quitBtn");b.textContent="Opravdu ukončit? Ťukni znovu";b.classList.add("armed");quitArmed=setTimeout(disarmQuit,3000);return}
   disarmQuit();
   if(Q.qs.some(q=>q.answer)) finish(); else {clearQ();Q=null;show("home");renderHome()}
 };
