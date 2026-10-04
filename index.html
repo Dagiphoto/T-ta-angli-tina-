@@ -45,7 +45,11 @@ img{max-width:100%}
   --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25); color-scheme:dark}
 
 *{box-sizing:border-box}
-body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:16px;line-height:1.5;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:16px;line-height:1.5;margin:0;overscroll-behavior-y:contain}
+.resume{background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.resume p{margin:0;min-width:0;flex:1 1 220px}
+.resume .btns{display:flex;gap:8px;flex-wrap:wrap}
+.btn.danger{background:var(--bad);color:var(--surface)}
 .wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:20px 48px;display:flex;flex-direction:column;gap:20px}
 h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;line-height:1.15}
 button{font:inherit;color:inherit;cursor:pointer}
@@ -184,6 +188,10 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
 
   <!-- HOME -->
   <main id="home" class="wrap" style="padding:0">
+    <section class="resume" id="resumeBox" hidden>
+      <p id="resumeTxt"></p>
+      <div class="btns"><button class="btn" id="resumeBtn">Pokračovat</button><button class="btn sec" id="discardBtn">Zahodit</button></div>
+    </section>
     <section class="panel" aria-labelledby="setH">
       <h2 id="setH">Nastavení testu</h2>
       <div class="settings">
@@ -260,7 +268,7 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
       </div>
       <div class="opts" id="opts"></div>
       <div class="reveal" id="reveal" hidden></div>
-      <div class="actions">
+      <div class="actions" style="justify-content:space-between">
         <button class="btn sec" id="quitBtn">Ukončit test</button>
         <button class="btn" id="nextBtn" hidden>Další →</button>
       </div>
@@ -411,23 +419,52 @@ function renderHome(){
   $("lessons").querySelectorAll("[data-lesson]").forEach(b=>b.onclick=()=>startQuiz(+b.dataset.lesson));
   $("dataInfo").innerHTML=custom?'Používáš vlastní soubor <b>'+esc(custom)+'</b> ('+WORDS.length+' slovíček).':'Výchozí sada: <b>Headway Elementary</b>, 12 lekcí, '+WORDS.length+' slovíček.';
   $("resetData").hidden=!custom;
+  const run=loadQ();
+  $("resumeBox").hidden=!run;
+  if(run){const done=run.qs.filter(q=>q.answer).length;
+    $("resumeTxt").innerHTML='Máš rozdělaný test: <b>Lekce '+run.lesson+'</b> ('+(run.dir==="en-cz"?"EN → CZ":"CZ → EN")+'), hotovo '+done+' z '+run.qs.length+' otázek.';}
 }
+$("resumeBtn").onclick=()=>{const r=loadQ();if(r)resumeQ(r);else renderHome()};
+$("discardBtn").onclick=()=>{clearQ();renderHome()};
 document.querySelectorAll("[data-dir]").forEach(b=>b.addEventListener("click",renderHome));
 function msg(text,err){const m=$("dataMsg");m.hidden=false;m.className="notice"+(err?" err":"");m.textContent=text}
 $("csvFile").onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   const r=new FileReader();
-  r.onload=()=>{try{const w=parseCSV(String(r.result));WORDS=w;custom=f.name;store.set("hw.custom",{name:f.name,words:w});store.del("hw.best");renderHome();
+  r.onload=()=>{try{const w=parseCSV(String(r.result));WORDS=w;custom=f.name;store.set("hw.custom",{name:f.name,words:w});clearQ();store.del("hw.best");renderHome();
       const ls=new Set(w.map(x=>x.l));msg("Nahráno "+w.length+" slovíček v "+ls.size+" lekcích.")}
     catch(err){msg(err.message,true)}
     e.target.value="";};
   r.onerror=()=>msg("Soubor se nepodařilo přečíst.",true);
   r.readAsText(f,"utf-8");
 };
-$("resetData").onclick=()=>{WORDS=DEFAULT;custom=null;store.del("hw.custom");store.del("hw.best");renderHome();msg("Obnovena výchozí sada Headway Elementary.")};
+$("resetData").onclick=()=>{WORDS=DEFAULT;custom=null;store.del("hw.custom");store.del("hw.best");clearQ();renderHome();msg("Obnovena výchozí sada Headway Elementary.")};
 
 /* ---------- quiz ---------- */
 let Q=null;
+// Progress is saved after every step so a page reload (pull-to-refresh, app switch, low memory) never loses a running test.
+const sig=()=>(custom||"default")+"|"+WORDS.length;
+function saveQ(){
+  if(!Q) return;
+  const ix=w=>WORDS.indexOf(w);
+  store.set("hw.run",{sig:sig(),lesson:Q.lesson,dir:Q.dir,full:Q.full,i:Q.i,
+    qs:Q.qs.map(q=>[ix(q.w),q.opts.map(ix),q.answer?ix(q.answer):-1])});
+}
+function loadQ(){
+  const r=store.get("hw.run",null);
+  if(!r||r.sig!==sig()||!Array.isArray(r.qs)||!r.qs.length) return null;
+  const W=i=>WORDS[i];
+  if(r.qs.some(q=>!W(q[0])||q[1].length<2||q[1].some(i=>!W(i)))) return null;
+  return {lesson:r.lesson,dir:r.dir,full:r.full,i:Math.min(r.i|0,r.qs.length-1),pool:WORDS.filter(w=>w.l===r.lesson),
+    qs:r.qs.map(q=>({w:W(q[0]),opts:q[1].map(W),answer:q[2]>=0?W(q[2]):null}))};
+}
+function clearQ(){store.del("hw.run")}
+function resumeQ(saved){
+  Q=saved;
+  while(Q.i<Q.qs.length-1&&Q.qs[Q.i].answer) Q.i++;
+  if(Q.qs[Q.i].answer){finish();return}
+  show("quiz");renderQ();
+}
 function show(view){
   ["home","quiz","results"].forEach(v=>$(v).hidden=v!==view);
   $("homeBtn").hidden=view==="home";
@@ -448,7 +485,7 @@ function startQuiz(lesson,subset){
   if(!subset&&S.cnt>0) items=items.slice(0,S.cnt);
   Q={lesson,dir:S.dir,pool,i:0,full:!subset&&S.cnt===0,qs:[]};
   Q.qs=items.map(w=>makeQuestion(w,pool));
-  show("quiz");renderQ();
+  saveQ();show("quiz");renderQ();
 }
 function highlight(ex,word){
   const s=esc(ex); const base=word.split(/[\s(/]/)[0];
@@ -461,6 +498,7 @@ function exampleRow(w,size){
   return '<div class="ex">'+spkBtn(w.ex,size||"sm","Přehrát větu: "+w.ex)+'<p>'+highlight(w.ex,w.en)+'</p></div>';
 }
 function renderQ(){
+  disarmQuit();
   const q=Q.qs[Q.i], w=q.w, enToCz=Q.dir==="en-cz", n=Q.qs.length;
   $("qLabel").textContent="Lekce "+Q.lesson+" · "+(enToCz?"EN → CZ":"CZ → EN");
   $("qCount").textContent=(Q.i+1)+" / "+n;
@@ -481,7 +519,7 @@ function renderQ(){
 }
 function answer(k){
   const q=Q.qs[Q.i]; if(q.answer!=null) return;
-  q.answer=q.opts[k]; const ok=q.answer===q.w;
+  q.answer=q.opts[k]; const ok=q.answer===q.w; saveQ();
   $("opts").querySelectorAll(".opt").forEach((b,j)=>{
     b.disabled=true;
     if(q.opts[j]===q.w) b.classList.add("ok");
@@ -495,18 +533,26 @@ function answer(k){
   $("nextBtn").focus({preventScroll:true});
   if(Q.dir==="cz-en") speak(w.en);
 }
-$("nextBtn").onclick=()=>{ if(Q.i<Q.qs.length-1){Q.i++;renderQ()} else finish(); };
+$("nextBtn").onclick=()=>{ if(Q.i<Q.qs.length-1){Q.i++;saveQ();renderQ()} else finish(); };
 document.addEventListener("keydown",e=>{
   if($("quiz").hidden||e.metaKey||e.ctrlKey||e.altKey) return;
   const m={a:0,b:1,c:2,"1":0,"2":1,"3":2}[e.key.toLowerCase()];
   if(m!=null&&Q.qs[Q.i].answer==null){answer(m);e.preventDefault()}
   else if(e.key==="Enter"&&!$("nextBtn").hidden&&document.activeElement!==$("nextBtn")){$("nextBtn").click();e.preventDefault()}
 });
-$("quitBtn").onclick=()=>{ if(Q.qs.some(q=>q.answer)) finish(); else {show("home");renderHome()} };
+// Two-step quit so a stray tap next to "Další" can't end the test.
+let quitArmed=null;
+function disarmQuit(){clearTimeout(quitArmed);quitArmed=null;const b=$("quitBtn");b.textContent="Ukončit test";b.classList.remove("danger");b.classList.add("sec")}
+$("quitBtn").onclick=()=>{
+  if(!quitArmed){const b=$("quitBtn");b.textContent="Opravdu ukončit?";b.classList.remove("sec");b.classList.add("danger");quitArmed=setTimeout(disarmQuit,3000);return}
+  disarmQuit();
+  if(Q.qs.some(q=>q.answer)) finish(); else {clearQ();Q=null;show("home");renderHome()}
+};
 
 /* ---------- results ---------- */
 let filter="all";
 function finish(){
+  clearQ();
   const done=Q.qs.filter(q=>q.answer!=null), good=done.filter(q=>q.answer===q.w).length;
   const pct=done.length?Math.round(good/done.length*100):0;
   if(Q.full&&done.length===Q.qs.length){const b=store.get("hw.best",{}),key=Q.lesson+"|"+Q.dir;b[key]=Math.max(b[key]||0,pct);store.set("hw.best",b)}
@@ -540,6 +586,8 @@ $("retryAll").onclick=()=>{S.dir=Q.dir;startQuiz(Q.lesson)};
 $("backHome").onclick=$("homeBtn").onclick=()=>{show("home");renderHome()};
 
 renderHome();
+const pending=loadQ();
+if(pending) resumeQ(pending);
 })();
 </script>
 
