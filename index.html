@@ -1,8 +1,18 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Procvičování anglických slovíček Headway Elementary – 12 lekcí, testy a výslovnost.">
 <title>Headway Slovíčka</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Noto+Sans:wght@400;500&display=swap">
 <style>
+html{-webkit-text-size-adjust:100%}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+img{max-width:100%}
 /* Layout: one centred column (max 760px) — header strip, then a single working "card" per screen: lessons → quiz → results. */
 :root{
   --bg:#EEF1EC;          /* pale sage paper */
@@ -163,6 +173,8 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
 .warn{font-size:.85rem;color:var(--bad)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <header class="top">
@@ -530,3 +542,6 @@ $("backHome").onclick=$("homeBtn").onclick=()=>{show("home");renderHome()};
 renderHome();
 })();
 </script>
+
+</body>
+</html>
