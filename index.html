@@ -512,13 +512,16 @@ function loadVoices(){if(!synth)return;const all=synth.getVoices()||[];voices=al
 // "be – was/were – been" is read as "be, was, were, been"
 const sayText=t=>String(t).replace(/\s+–\s+/g,", ").replace(/\//g,", ");
 const normLang=l=>String(l||"").replace("_","-").toLowerCase();
+const NICE=/google|natural|premium|enhanced|daniel|serena|samantha/i;
 function pickVoice(){
-  const want=S.acc.toLowerCase();
-  // offline (localService) voices first: network voices often stay silent on phones
-  const best=list=>list.find(v=>v.localService&&/google|natural|premium|enhanced|daniel|serena|samantha/i.test(v.name))||list.find(v=>v.localService)||list[0];
-  return best(voices.filter(v=>normLang(v.lang)===want))||best(voices)||null;
+  const want=S.acc.toLowerCase(), m=voices.filter(v=>normLang(v.lang)===want);
+  if(!isAndroid) return m.find(v=>NICE.test(v.name))||m[0]||voices[0]||null; // iPhone & computers: unchanged
+  // Android: offline (localService) voices first, network voices often stay silent
+  const best=list=>list.find(v=>v.localService&&NICE.test(v.name))||list.find(v=>v.localService)||list[0];
+  return best(m)||best(voices)||null;
 }
-/* One speech engine for the whole app. It works around Android Chrome bugs:
+/* One speech engine for the whole app. iPhone and computers keep the original simple path;
+   only Android gets the workarounds for its Chrome bugs:
    - speak() right after cancel() is often silently dropped → wait a moment after cancelling
    - utterances get garbage-collected before onend fires → keep a reference until they finish
    - a selected voice sometimes plays nothing → if speech doesn't start, retry with language only
@@ -529,7 +532,20 @@ function ttsCancel(){if(!synth)return;speakSeq++;lastCancel=Date.now();synth.can
 function tts(text,o){
   o=o||{};
   if(!synth||!text){if(!synth)soundHint("none");return}
-  const id=++speakSeq, busy=synth.speaking||synth.pending;
+  const id=++speakSeq;
+  if(!isAndroid){ // iPhone & computers: cancel and speak straight away, exactly as before
+    synth.cancel();
+    const u=new SpeechSynthesisUtterance(text);
+    if(o.voice)u.voice=o.voice; u.lang=o.lang||S.acc; u.rate=S.rate;
+    let ended=false;
+    const fin=()=>{if(ended)return;ended=true;liveUtts.delete(u);clearTimeout(guard);if(id===speakSeq&&o.onend)o.onend()};
+    u.onstart=soundOk; u.onend=fin;
+    u.onerror=e=>{if(e&&e.error==="not-allowed")soundHint("blocked");fin()};
+    const guard=setTimeout(fin,4000+text.length*170/S.rate);
+    liveUtts.add(u); synth.speak(u);
+    return;
+  }
+  const busy=synth.speaking||synth.pending;
   if(busy){synth.cancel();lastCancel=Date.now()}
   const go=(useVoice,canRetry)=>{
     if(id!==speakSeq) return;
@@ -552,7 +568,7 @@ function tts(text,o){
     try{synth.resume()}catch(e){}
     synth.speak(u);
   };
-  const wait=Math.max(0,(isAndroid?220:60)-(Date.now()-lastCancel));
+  const wait=Math.max(0,220-(Date.now()-lastCancel));
   if(busy||Date.now()-lastCancel<250) setTimeout(()=>go(!voiceBroken,true),wait); else go(!voiceBroken,true);
 }
 let playingBtn=null;
