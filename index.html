@@ -205,6 +205,11 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
 .vrow small{display:block;color:var(--muted)}
 .vrow.cur{background:var(--accent-soft);border-radius:10px}
 .foot{color:var(--muted);font-size:.82rem;text-align:center}
+.soundbox{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.soundbox > div{flex:1 1 240px;min-width:0;margin:0}
+.notice ol,.toast ol{margin:6px 0 0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));max-width:560px;margin-inline:auto;z-index:20;
+  background:var(--surface);border:2px solid var(--bad);border-radius:var(--r);padding:14px 16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:10px;font-size:.92rem}
 .warn{font-size:.85rem;color:var(--bad)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -257,6 +262,10 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
         </div>
       </div>
       <p class="warn" id="ttsWarn" hidden>Tento prohlížeč nepodporuje přehrávání výslovnosti (Web Speech API). Zkus Chrome, Safari nebo Edge.</p>
+      <div class="soundbox">
+        <button class="btn sec" id="soundTest">Vyzkoušet zvuk</button>
+        <div id="soundInfo" class="vnote"></div>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="lesH">
@@ -393,6 +402,11 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em;background:var(--s
     </section>
   </main>
 
+  <div class="toast" id="toast" role="alert" hidden>
+    <div id="toastTxt"></div>
+    <button class="btn sec" id="toastX">Rozumím</button>
+  </div>
+
   <p class="foot">Výslovnost přehrává hlas zabudovaný v tvém zařízení. Na telefonu zkontroluj, že není zapnutý tichý režim.</p>
 </div>
 
@@ -489,30 +503,90 @@ bindSeg("lcz","lcz",Number);bindSeg("lrand","lrand",Number);bindSeg("lpause","lp
 
 /* ---------- speech ---------- */
 const synth=window.speechSynthesis||null;
-let voices=[],csVoice=null;
-function loadVoices(){if(!synth)return;const all=synth.getVoices();voices=all.filter(v=>/^en[-_]/i.test(v.lang));csVoice=all.find(v=>/^cs/i.test(v.lang))||null}
+const UA=navigator.userAgent||"";
+const isAndroid=/Android/i.test(UA);
+// in-app browsers (Messenger, Facebook, Instagram, app WebViews) usually have no speech engine
+const inApp=/; wv\)|FBAN|FBAV|FB_IAB|Instagram|Line\/|MicroMessenger/i.test(UA);
+let voices=[],csVoice=null,soundWorks=false;
+function loadVoices(){if(!synth)return;const all=synth.getVoices()||[];voices=all.filter(v=>/^en[-_]/i.test(v.lang));csVoice=all.find(v=>/^cs/i.test(v.lang))||null;renderSoundInfo()}
 // "be – was/were – been" is read as "be, was, were, been"
 const sayText=t=>String(t).replace(/\s+–\s+/g,", ").replace(/\//g,", ");
-if(synth){loadVoices();synth.onvoiceschanged=loadVoices}else{$("ttsWarn").hidden=false}
+const normLang=l=>String(l||"").replace("_","-").toLowerCase();
 function pickVoice(){
   const want=S.acc.toLowerCase();
-  const m=voices.filter(v=>v.lang.replace("_","-").toLowerCase()===want);
-  const pref=m.find(v=>/google|natural|premium|enhanced|daniel|serena|samantha/i.test(v.name));
-  return pref||m[0]||voices.find(v=>/^en/i.test(v.lang))||null;
+  // offline (localService) voices first: network voices often stay silent on phones
+  const best=list=>list.find(v=>v.localService&&/google|natural|premium|enhanced|daniel|serena|samantha/i.test(v.name))||list.find(v=>v.localService)||list[0];
+  return best(voices.filter(v=>normLang(v.lang)===want))||best(voices)||null;
+}
+/* One speech engine for the whole app. It works around Android Chrome bugs:
+   - speak() right after cancel() is often silently dropped → wait a moment after cancelling
+   - utterances get garbage-collected before onend fires → keep a reference until they finish
+   - a selected voice sometimes plays nothing → if speech doesn't start, retry with language only
+   - the engine can get stuck paused → resume() before speaking */
+const liveUtts=new Set();
+let speakSeq=0,lastCancel=0,voiceBroken=false;
+function ttsCancel(){if(!synth)return;speakSeq++;lastCancel=Date.now();synth.cancel()}
+function tts(text,o){
+  o=o||{};
+  if(!synth||!text){if(!synth)soundHint("none");return}
+  const id=++speakSeq, busy=synth.speaking||synth.pending;
+  if(busy){synth.cancel();lastCancel=Date.now()}
+  const go=(useVoice,canRetry)=>{
+    if(id!==speakSeq) return;
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang=o.lang||S.acc; u.rate=S.rate;
+    if(useVoice&&o.voice) u.voice=o.voice;
+    let started=false,ended=false;
+    const drop=()=>{ended=true;liveUtts.delete(u);clearTimeout(watch);clearTimeout(guard)};
+    const fin=()=>{if(ended)return;drop();if(id===speakSeq&&o.onend)o.onend()};
+    const retry=()=>{drop();voiceBroken=true;synth.cancel();lastCancel=Date.now();setTimeout(()=>go(false,false),200)};
+    u.onstart=()=>{started=true;clearTimeout(watch);soundOk()};
+    u.onend=fin;
+    u.onerror=e=>{if(ended)return;const er=e&&e.error;
+      if(er==="not-allowed") soundHint("blocked");
+      if(!started&&canRetry&&er!=="interrupted"&&er!=="canceled") retry(); else fin()};
+    const watch=setTimeout(()=>{if(started||ended)return;
+      if(canRetry&&useVoice&&o.voice) retry(); else soundHint("silent")},useVoice?1800:3000);
+    const guard=setTimeout(fin,4000+text.length*170/S.rate);
+    liveUtts.add(u);
+    try{synth.resume()}catch(e){}
+    synth.speak(u);
+  };
+  const wait=Math.max(0,(isAndroid?220:60)-(Date.now()-lastCancel));
+  if(busy||Date.now()-lastCancel<250) setTimeout(()=>go(!voiceBroken,true),wait); else go(!voiceBroken,true);
 }
 let playingBtn=null;
 function speak(text,btn){
-  if(!synth||!text) return;
-  synth.cancel();
+  if(!text) return;
   if(playingBtn)playingBtn.classList.remove("playing");
-  const u=new SpeechSynthesisUtterance(sayText(text));
-  const v=pickVoice(); if(v)u.voice=v;
-  u.lang=S.acc; u.rate=S.rate;
-  if(btn){playingBtn=btn;btn.classList.add("playing");
-    const end=()=>{btn.classList.remove("playing");if(playingBtn===btn)playingBtn=null};
-    u.onend=end;u.onerror=end;}
-  synth.speak(u);
+  playingBtn=btn||null;
+  if(btn)btn.classList.add("playing");
+  tts(sayText(text),{voice:pickVoice(),onend:()=>{if(btn){btn.classList.remove("playing");if(playingBtn===btn)playingBtn=null}}});
 }
+/* sound check + Android help */
+const HELP={
+  blocked:'<b>Prohlížeč zablokoval zvuk.</b> Ťukni přímo na tlačítko s reproduktorem, první zvuk se musí spustit ťuknutím.',
+  none:'<b>Tenhle prohlížeč neumí přehrávat výslovnost.</b> Otevři stránku přímo v aplikaci <b>Chrome</b> (ne v Messengeru, Facebooku, Instagramu nebo v aplikaci Claude).',
+  silent:'<b>Zvuk se nespustil.</b> Na Androidu zkus:<ol><li>Otevřít stránku přímo v aplikaci <b>Chrome</b>, ne v Messengeru, Facebooku ani v aplikaci Claude.</li><li>Při přehrávání zesílit <b>hlasitost médií</b>.</li><li><b>Nastavení → Usnadnění → Převod textu na řeč</b>: jako modul zvol <b>Google</b> (Rozpoznávání a syntéza řeči) a v jeho nastavení stáhni <b>angličtinu</b> a <b>češtinu</b>. Pak Chrome zavři a otevři znovu.</li></ol>'
+};
+let hintShown=false;
+function soundHint(kind){
+  if(soundWorks&&kind!=="blocked") return;
+  renderSoundInfo(kind);
+  if(hintShown) return; hintShown=true;
+  $("toastTxt").innerHTML=HELP[kind]||HELP.silent;$("toast").hidden=false;
+}
+function soundOk(){if(soundWorks)return;soundWorks=true;$("toast").hidden=true;renderSoundInfo()}
+function renderSoundInfo(problem){
+  const el=$("soundInfo"); if(!el) return;
+  if(!synth){el.innerHTML=HELP.none;el.className="notice err";return}
+  if(problem&&!soundWorks){el.innerHTML=HELP[problem]||HELP.silent;el.className="notice err";return}
+  el.className="vnote";
+  el.textContent=(soundWorks?"✓ Zvuk funguje. ":"")+"Anglických hlasů v zařízení: "+voices.length+" · český hlas: "+(csVoice?"ano":"ne")+(inApp?" · Pozor: stránka je otevřená uvnitř jiné aplikace, zvuk může chybět. Otevři ji v Chrome.":"");
+}
+if(synth){loadVoices();try{synth.addEventListener("voiceschanged",loadVoices)}catch(e){synth.onvoiceschanged=loadVoices}
+  setTimeout(loadVoices,800);setTimeout(loadVoices,2500)} // Android sometimes never fires voiceschanged
+else $("ttsWarn").hidden=false;
 function spkBtn(text,size,label){
   return '<button class="spk '+(size||"")+'" data-say="'+esc(text)+'" aria-label="'+esc(label||"Přehrát výslovnost: "+text)+'" title="Přehrát výslovnost">'+SPK+'</button>';
 }
@@ -547,6 +621,8 @@ function renderHome(){
   if(run){const done=run.qs.filter(q=>q.answer).length;
     $("resumeTxt").innerHTML='Máš rozdělaný test: <b>'+esc(lessonName(run.lesson))+'</b>'+(dirName(run.dir)?' ('+dirName(run.dir)+')':'')+', hotovo '+done+' z '+run.qs.length+' otázek.';}
 }
+$("soundTest").onclick=e=>{const b=e.currentTarget;soundWorks=false;hintShown=false;speak("Hello! The sound is working.",b)};
+$("toastX").onclick=()=>{$("toast").hidden=true};
 $("resumeBtn").onclick=()=>{const r=loadQ();if(r)resumeQ(r);else renderHome()};
 $("discardBtn").onclick=()=>{clearQ();renderHome()};
 document.querySelectorAll("[data-dir]").forEach(b=>b.addEventListener("click",renderHome));
@@ -605,7 +681,7 @@ function show(view){
   ["home","quiz","results","listen"].forEach(v=>$(v).hidden=v!==view);
   $("homeBtn").hidden=view==="home";
   window.scrollTo({top:0,behavior:"smooth"});
-  if(synth)synth.cancel();
+  ttsCancel();
 }
 function makeQuestion(w,pool){
   if(w.l==="V2") return {w,opts:gapOptions(w),answer:null};
@@ -759,14 +835,8 @@ function renderListenList(){
 }
 function lsWait(ms,cb){const t=LS.token;clearTimeout(LS.timer);LS.timer=setTimeout(()=>{if(t===LS.token)cb()},ms)}
 function lsSay(text,cz,cb){
-  const t=LS.token;let done=false;
-  const fin=()=>{if(done)return;done=true;clearTimeout(guard);if(t===LS.token)cb()};
-  const u=new SpeechSynthesisUtterance(cz?text.replace(/\//g,","):sayText(text));
-  if(cz){u.lang="cs-CZ";u.voice=csVoice}else{const v=pickVoice();if(v)u.voice=v;u.lang=S.acc}
-  u.rate=S.rate;u.onend=fin;u.onerror=fin;
-  // some phones never fire onend, so move on after a generous timeout
-  const guard=setTimeout(fin,2500+text.length*160/S.rate);
-  synth.speak(u);
+  const tok=LS.token;
+  tts(cz?text.replace(/\//g,","):sayText(text),{lang:cz?"cs-CZ":S.acc,voice:cz?csVoice:pickVoice(),onend:()=>{if(tok===LS.token)cb()}});
 }
 function lsStep(phase){
   if(!LS.playing) return;
@@ -779,16 +849,16 @@ function lsStep(phase){
     return;}
   LS.i=(LS.i+1)%LS.order.length;lsStep(0);
 }
-function restartStep(){LS.token++;clearTimeout(LS.timer);if(synth)synth.cancel();lsStep(0)}
+function restartStep(){LS.token++;clearTimeout(LS.timer);ttsCancel();lsStep(0)}
 function playListen(){
-  if(!synth) return;
+  if(!synth){soundHint("none");return}
   LS.playing=true;
   try{navigator.wakeLock&&navigator.wakeLock.request("screen").then(l=>{LS.wl=l}).catch(()=>{})}catch(e){}
   restartStep();
 }
 function pauseListen(){
   if(!LS.playing) return;
-  LS.playing=false;LS.token++;clearTimeout(LS.timer);if(synth)synth.cancel();
+  LS.playing=false;LS.token++;clearTimeout(LS.timer);ttsCancel();
   try{LS.wl&&LS.wl.release()}catch(e){}LS.wl=null;
   renderListen(-1);
 }
